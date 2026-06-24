@@ -1,0 +1,5 @@
+anthropic==0.40.0
+twilio==9.3.7
+requests==2.32.3
+python-dotenv==1.0.1
+functions-framework==3.8.1
