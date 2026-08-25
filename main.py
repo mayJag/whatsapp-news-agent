@@ -5,11 +5,12 @@ import requests
 import xml.etree.ElementTree as ET
 import functions_framework
 from dotenv import load_dotenv
-import anthropic
 
 load_dotenv()
 
-ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
+GOOGLE_CLOUD_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT", "claude-omniroute")
+GOOGLE_CLOUD_LOCATION = os.getenv("GOOGLE_CLOUD_LOCATION", "global")
+GEMINI_MODEL = "gemini-3.7-flash"
 WA_ACCESS_TOKEN = os.environ["WA_ACCESS_TOKEN"]
 WA_PHONE_ID = os.environ["WA_PHONE_ID"]
 WA_TO = os.environ["WA_TO"]
@@ -51,8 +52,9 @@ def fetch_all_news() -> dict:
     return {k: fetch_rss(v) for k, v in RSS_FEEDS.items()}
 
 
-def format_with_claude(news_data: dict) -> str:
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+def format_with_gemini(news_data: dict) -> str:
+    from google import genai
+    from google.genai import types
 
     system_prompt = (
         "You are a highly concise, professional news editor. "
@@ -69,14 +71,20 @@ def format_with_claude(news_data: dict) -> str:
         "Omit any story where both title and description are null or empty. "
         "Total output must stay under 950 characters — WhatsApp template messages reject longer bodies."
     )
+    prompt = f"{system_prompt}\n\n{json.dumps(news_data, ensure_ascii=False)}"
 
-    message = client.messages.create(
-        model="claude-haiku-4-5",
-        max_tokens=900,
-        system=system_prompt,
-        messages=[{"role": "user", "content": json.dumps(news_data, ensure_ascii=False)}],
+    client = genai.Client(vertexai=True, project=GOOGLE_CLOUD_PROJECT, location=GOOGLE_CLOUD_LOCATION)
+    response = client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=[types.Content(role="user", parts=[types.Part.from_text(text=prompt)])],
+        config=types.GenerateContentConfig(
+            temperature=0.3,
+            http_options=types.HttpOptions(timeout=60 * 1000),
+        ),
     )
-    return message.content[0].text
+    if not response.text:
+        raise RuntimeError(f"Unexpected empty Gemini response: {response}")
+    return response.text
 
 
 def send_whatsapp_template(body: str) -> list[str]:
@@ -118,7 +126,7 @@ def send_whatsapp_template(body: str) -> list[str]:
 def send_morning_news(request):
     try:
         news_data = fetch_all_news()
-        formatted = format_with_claude(news_data)
+        formatted = format_with_gemini(news_data)
         message_ids = send_whatsapp_template(formatted)
         return {"status": "ok", "message_ids": message_ids}, 200
     except Exception as e:

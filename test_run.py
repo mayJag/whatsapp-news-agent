@@ -2,12 +2,13 @@ import os
 import json
 import requests
 from dotenv import load_dotenv
-import anthropic
 
 load_dotenv()
 
 NEWS_API_KEY = os.environ["NEWS_API_KEY"]
-ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
+GOOGLE_CLOUD_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT", "claude-omniroute")
+GOOGLE_CLOUD_LOCATION = os.getenv("GOOGLE_CLOUD_LOCATION", "global")
+GEMINI_MODEL = "gemini-3.7-flash"
 WA_ACCESS_TOKEN = os.environ["WA_ACCESS_TOKEN"]
 WA_PHONE_ID = os.environ["WA_PHONE_ID"]
 WA_TO = os.environ["WA_TO"]
@@ -57,29 +58,37 @@ print(f"  india:  {len(news_data['india'])} articles")
 print(f"  tech:   {len(news_data['tech'])} articles")
 print(f"  sports: {len(news_data['sports'])} articles")
 
-print("\n[2/3] Formatting with Claude...")
-client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-message = client.messages.create(
-    model="claude-sonnet-4-6",
-    max_tokens=1024,
-    system=(
-        "You are a highly concise, professional news editor. "
-        "You will receive a JSON object with four keys: global, india, tech, sports. "
-        "Each key contains up to 3 articles with title, description, and url fields. "
-        "Output ONLY the formatted WhatsApp message — no greetings, no sign-offs, no commentary. "
-        "Structure the output into exactly four blocks in this order:\n"
-        "🌍 *Global News*\n"
-        "🇮🇳 *Indian News*\n"
-        "💻 *Tech News*\n"
-        "🏏 *Sports News*\n\n"
-        "Under each block, list each story as:\n"
-        "• One punchy sentence summary.\n"
-        "  <url>\n\n"
-        "Omit any story where both title and description are null or empty."
-    ),
-    messages=[{"role": "user", "content": json.dumps(news_data, ensure_ascii=False)}],
+print("\n[2/3] Formatting with Gemini...")
+from google import genai
+from google.genai import types
+
+system_prompt = (
+    "You are a highly concise, professional news editor. "
+    "You will receive a JSON object with four keys: global, india, tech, sports. "
+    "Each key contains up to 3 articles with title, description, and url fields. "
+    "Output ONLY the formatted WhatsApp message — no greetings, no sign-offs, no commentary. "
+    "Structure the output into exactly four blocks in this order:\n"
+    "🌍 *Global News*\n"
+    "🇮🇳 *Indian News*\n"
+    "💻 *Tech News*\n"
+    "🏏 *Sports News*\n\n"
+    "Under each block, list each story as:\n"
+    "• One punchy sentence summary.\n"
+    "  <url>\n\n"
+    "Omit any story where both title and description are null or empty."
 )
-formatted = message.content[0].text
+prompt = f"{system_prompt}\n\n{json.dumps(news_data, ensure_ascii=False)}"
+
+client = genai.Client(vertexai=True, project=GOOGLE_CLOUD_PROJECT, location=GOOGLE_CLOUD_LOCATION)
+response = client.models.generate_content(
+    model=GEMINI_MODEL,
+    contents=[types.Content(role="user", parts=[types.Part.from_text(text=prompt)])],
+    config=types.GenerateContentConfig(
+        temperature=0.3,
+        http_options=types.HttpOptions(timeout=60 * 1000),
+    ),
+)
+formatted = response.text
 
 print("\n--- FORMATTED MESSAGE PREVIEW ---")
 print(formatted)
