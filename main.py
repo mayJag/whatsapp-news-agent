@@ -6,15 +6,18 @@ import xml.etree.ElementTree as ET
 import functions_framework
 from dotenv import load_dotenv
 import anthropic
-from twilio.rest import Client
 
 load_dotenv()
 
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
-TWILIO_ACCOUNT_SID = os.environ["TWILIO_ACCOUNT_SID"]
-TWILIO_AUTH_TOKEN = os.environ["TWILIO_AUTH_TOKEN"]
-TWILIO_FROM = os.environ["TWILIO_FROM"]
-TWILIO_TO = os.environ["TWILIO_TO"]
+WA_ACCESS_TOKEN = os.environ["WA_ACCESS_TOKEN"]
+WA_PHONE_ID = os.environ["WA_PHONE_ID"]
+WA_TO = os.environ["WA_TO"]
+WA_TEMPLATE_NAME = os.environ["WA_TEMPLATE_NAME"]
+WA_TEMPLATE_LANG = os.environ.get("WA_TEMPLATE_LANG", "en_US")
+
+WHATSAPP_API_VERSION = "v25.0"
+WHATSAPP_API_URL = f"https://graph.facebook.com/{WHATSAPP_API_VERSION}/{WA_PHONE_ID}/messages"
 
 RSS_FEEDS = {
     "global": "https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en",
@@ -61,10 +64,10 @@ def format_with_claude(news_data: dict) -> str:
         "🇮🇳 *Indian News*\n"
         "💻 *Tech News*\n"
         "🏏 *Sports News*\n\n"
-        "Under each block, list 4 to 5 stories as:\n"
+        "Under each block, list 3 to 4 stories as:\n"
         "• One punchy sentence summary (max 12 words).\n\n"
         "Omit any story where both title and description are null or empty. "
-        "Total output must stay under 1500 characters."
+        "Total output must stay under 950 characters — WhatsApp template messages reject longer bodies."
     )
 
     message = client.messages.create(
@@ -76,19 +79,39 @@ def format_with_claude(news_data: dict) -> str:
     return message.content[0].text
 
 
-def send_whatsapp(body: str) -> str:
-    if len(body) > 1550:
-        body = body[:1547] + "..."
-    twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-    sids = []
-    for number in TWILIO_TO.split(","):
-        msg = twilio_client.messages.create(
-            from_=TWILIO_FROM,
-            body=body,
-            to=number.strip(),
+def send_whatsapp_template(body: str) -> list[str]:
+    if len(body) > 1024:
+        body = body[:1021] + "..."
+
+    message_ids = []
+    for number in WA_TO.split(","):
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": number.strip(),
+            "type": "template",
+            "template": {
+                "name": WA_TEMPLATE_NAME,
+                "language": {"code": WA_TEMPLATE_LANG},
+                "components": [
+                    {
+                        "type": "body",
+                        "parameters": [{"type": "text", "text": body}],
+                    }
+                ],
+            },
+        }
+        resp = requests.post(
+            WHATSAPP_API_URL,
+            headers={
+                "Authorization": f"Bearer {WA_ACCESS_TOKEN}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=20,
         )
-        sids.append(msg.sid)
-    return ",".join(sids)
+        resp.raise_for_status()
+        message_ids.append(resp.json()["messages"][0]["id"])
+    return message_ids
 
 
 @functions_framework.http
@@ -96,7 +119,7 @@ def send_morning_news(request):
     try:
         news_data = fetch_all_news()
         formatted = format_with_claude(news_data)
-        sid = send_whatsapp(formatted)
-        return {"status": "ok", "message_sid": sid}, 200
+        message_ids = send_whatsapp_template(formatted)
+        return {"status": "ok", "message_ids": message_ids}, 200
     except Exception as e:
         return {"status": "error", "detail": str(e)}, 500

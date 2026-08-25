@@ -3,16 +3,17 @@ import json
 import requests
 from dotenv import load_dotenv
 import anthropic
-from twilio.rest import Client
 
 load_dotenv()
 
 NEWS_API_KEY = os.environ["NEWS_API_KEY"]
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
-TWILIO_ACCOUNT_SID = os.environ["TWILIO_ACCOUNT_SID"]
-TWILIO_AUTH_TOKEN = os.environ["TWILIO_AUTH_TOKEN"]
-TWILIO_FROM = os.environ["TWILIO_FROM"]
-TWILIO_TO = os.environ["TWILIO_TO"]
+WA_ACCESS_TOKEN = os.environ["WA_ACCESS_TOKEN"]
+WA_PHONE_ID = os.environ["WA_PHONE_ID"]
+WA_TO = os.environ["WA_TO"]
+
+WHATSAPP_API_VERSION = "v25.0"
+WHATSAPP_API_URL = f"https://graph.facebook.com/{WHATSAPP_API_VERSION}/{WA_PHONE_ID}/messages"
 
 NEWS_API_URL = "https://newsapi.org/v2/top-headlines"
 
@@ -84,11 +85,22 @@ print("\n--- FORMATTED MESSAGE PREVIEW ---")
 print(formatted)
 print("---------------------------------")
 
-print("\n[3/3] Sending WhatsApp message...")
-twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-msg = twilio_client.messages.create(
-    from_=TWILIO_FROM,
-    body=formatted,
-    to=TWILIO_TO,
-)
-print(f"Done! Message SID: {msg.sid}")
+print("\n[3/3] Sending WhatsApp message (freeform — requires an open 24h customer service window)...")
+for number in WA_TO.split(","):
+    resp = requests.post(
+        WHATSAPP_API_URL,
+        headers={
+            "Authorization": f"Bearer {WA_ACCESS_TOKEN}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "messaging_product": "whatsapp",
+            "to": number.strip(),
+            "type": "text",
+            "text": {"body": formatted},
+        },
+        timeout=20,
+    )
+    resp.raise_for_status()
+    message_id = resp.json()["messages"][0]["id"]
+    print(f"Sent to {number.strip()}. Message ID: {message_id}")
