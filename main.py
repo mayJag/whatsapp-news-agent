@@ -93,7 +93,15 @@ def format_with_gemini(news_data: dict) -> str:
     return response.text
 
 
+def sanitize_template_param(text: str) -> str:
+    # WhatsApp template parameters reject newline/tab characters and runs of 4+ spaces.
+    text = re.sub(r"[\n\t]+", " | ", text)
+    text = re.sub(r" {2,}", " ", text)
+    return text.strip()
+
+
 def send_whatsapp_template(body: str) -> list[str]:
+    body = sanitize_template_param(body)
     if len(body) > 1024:
         body = body[:1021] + "..."
 
