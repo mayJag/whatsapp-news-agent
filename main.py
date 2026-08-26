@@ -1,9 +1,9 @@
 import os
 import json
 import re
+import sys
 import requests
 import xml.etree.ElementTree as ET
-import functions_framework
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -27,7 +27,13 @@ RSS_FEEDS = {
     "sports": "https://news.google.com/rss/search?q=sports+news&hl=en-US&gl=US&ceid=US:en",
 }
 
-_HEADERS = {"User-Agent": "Mozilla/5.0"}
+_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept": "application/rss+xml, application/xml;q=0.9, */*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://news.google.com/",
+}
 
 
 def strip_html(text: str) -> str:
@@ -122,12 +128,23 @@ def send_whatsapp_template(body: str) -> list[str]:
     return message_ids
 
 
-@functions_framework.http
-def send_morning_news(request):
+def main() -> None:
+    print("Fetching news from Google News RSS feeds...")
+    news_data = fetch_all_news()
+    for category, articles in news_data.items():
+        print(f"  {category}: {len(articles)} articles")
+
+    print("Formatting with Gemini...")
+    formatted = format_with_gemini(news_data)
+
+    print("Sending WhatsApp template message...")
+    message_ids = send_whatsapp_template(formatted)
+    print(f"Sent. Message IDs: {message_ids}")
+
+
+if __name__ == "__main__":
     try:
-        news_data = fetch_all_news()
-        formatted = format_with_gemini(news_data)
-        message_ids = send_whatsapp_template(formatted)
-        return {"status": "ok", "message_ids": message_ids}, 200
-    except Exception as e:
-        return {"status": "error", "detail": str(e)}, 500
+        main()
+    except Exception as exc:
+        print(f"Agent failed: {exc}", file=sys.stderr)
+        sys.exit(1)

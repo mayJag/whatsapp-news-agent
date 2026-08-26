@@ -1,8 +1,8 @@
+.git
+.gitignore
 .env
 env.yaml
-vertex-key.json
 __pycache__/
 *.pyc
 .venv/
 venv/
-_set_secrets.ps1
