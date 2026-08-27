@@ -98,8 +98,8 @@ def sanitize_template_param(text: str) -> str:
     text = re.sub(r"[\n\t]+", " • ", text)
     text = re.sub(r" {2,}", " ", text)
     text = text.strip()
-    if len(text) > 250:
-        text = text[:247] + "..."
+    if len(text) > 200:
+        text = text[:197] + "..."
     return text
 
 
