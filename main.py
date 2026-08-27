@@ -58,7 +58,10 @@ def fetch_all_news() -> dict:
     return {k: fetch_rss(v) for k, v in RSS_FEEDS.items()}
 
 
-def format_with_gemini(news_data: dict) -> str:
+SECTION_ORDER = ["global", "india", "tech", "sports"]
+
+
+def format_with_gemini(news_data: dict) -> dict:
     from google import genai
     from google.genai import types
 
@@ -66,16 +69,11 @@ def format_with_gemini(news_data: dict) -> str:
         "You are a highly concise, professional news editor. "
         "You will receive a JSON object with four keys: global, india, tech, sports. "
         "Each key contains up to 5 articles with title and description fields. "
-        "Output ONLY the formatted WhatsApp message — no greetings, no sign-offs, no commentary, no URLs. "
-        "Structure the output into exactly four blocks in this order:\n"
-        "🌍 *Global News*\n"
-        "🇮🇳 *Indian News*\n"
-        "💻 *Tech News*\n"
-        "🏏 *Sports News*\n\n"
-        "Under each block, list 3 to 4 stories as:\n"
-        "• One punchy sentence summary (max 12 words).\n\n"
-        "Omit any story where both title and description are null or empty. "
-        "Total output must stay under 950 characters — WhatsApp template messages reject longer bodies."
+        "Output ONLY a JSON object with exactly these four keys: global, india, tech, sports. "
+        "Each value must be a SINGLE LINE of plain text (no newlines) containing 3 to 4 punchy "
+        "story summaries (max 12 words each), separated by ' • '. No URLs, no markdown, no headers "
+        "— just the bullet-separated summaries. Omit any story where both title and description are "
+        "empty. Each value must stay under 220 characters."
     )
     prompt = f"{system_prompt}\n\n{json.dumps(news_data, ensure_ascii=False)}"
 
@@ -85,25 +83,30 @@ def format_with_gemini(news_data: dict) -> str:
         contents=[types.Content(role="user", parts=[types.Part.from_text(text=prompt)])],
         config=types.GenerateContentConfig(
             temperature=0.3,
+            response_mime_type="application/json",
             http_options=types.HttpOptions(timeout=60 * 1000),
         ),
     )
     if not response.text:
         raise RuntimeError(f"Unexpected empty Gemini response: {response}")
-    return response.text
+    sections = json.loads(response.text)
+    return {key: sections.get(key, "") for key in SECTION_ORDER}
 
 
 def sanitize_template_param(text: str) -> str:
     # WhatsApp template parameters reject newline/tab characters and runs of 4+ spaces.
-    text = re.sub(r"[\n\t]+", " | ", text)
+    text = re.sub(r"[\n\t]+", " • ", text)
     text = re.sub(r" {2,}", " ", text)
-    return text.strip()
+    text = text.strip()
+    if len(text) > 250:
+        text = text[:247] + "..."
+    return text
 
 
-def send_whatsapp_template(body: str) -> list[str]:
-    body = sanitize_template_param(body)
-    if len(body) > 1024:
-        body = body[:1021] + "..."
+def send_whatsapp_template(sections: dict) -> list[str]:
+    parameters = [
+        {"type": "text", "text": sanitize_template_param(sections[key])} for key in SECTION_ORDER
+    ]
 
     message_ids = []
     for number in WA_TO.split(","):
@@ -117,7 +120,7 @@ def send_whatsapp_template(body: str) -> list[str]:
                 "components": [
                     {
                         "type": "body",
-                        "parameters": [{"type": "text", "text": body}],
+                        "parameters": parameters,
                     }
                 ],
             },
@@ -145,10 +148,10 @@ def main() -> None:
         print(f"  {category}: {len(articles)} articles")
 
     print("Formatting with Gemini...")
-    formatted = format_with_gemini(news_data)
+    sections = format_with_gemini(news_data)
 
     print("Sending WhatsApp template message...")
-    message_ids = send_whatsapp_template(formatted)
+    message_ids = send_whatsapp_template(sections)
     print(f"Sent. Message IDs: {message_ids}")
 
 
