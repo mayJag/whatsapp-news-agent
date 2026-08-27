@@ -131,6 +131,8 @@ def send_whatsapp_template(body: str) -> list[str]:
             json=payload,
             timeout=20,
         )
+        if not resp.ok:
+            print(f"WhatsApp API error {resp.status_code}: {resp.text}", file=sys.stderr)
         resp.raise_for_status()
         message_ids.append(resp.json()["messages"][0]["id"])
     return message_ids
