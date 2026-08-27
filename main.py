@@ -24,7 +24,18 @@ RSS_FEEDS = {
     "global": "https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en",
     "india": "https://news.google.com/rss?hl=en-IN&gl=IN&ceid=IN:en",
     "tech": "https://news.google.com/rss/search?q=technology+news&hl=en-US&gl=US&ceid=US:en",
+    "ai": "https://news.google.com/rss/search?q=artificial+intelligence&hl=en-US&gl=US&ceid=US:en",
+    "agentic_ai": "https://news.google.com/rss/search?q=%22agentic+AI%22+OR+%22AI+agents%22&hl=en-US&gl=US&ceid=US:en",
     "sports": "https://news.google.com/rss/search?q=sports+news&hl=en-US&gl=US&ceid=US:en",
+}
+
+SECTION_META = {
+    "global": "🌍 *Global News*",
+    "india": "🇮🇳 *Indian News*",
+    "tech": "💻 *Tech News*",
+    "ai": "🤖 *AI News*",
+    "agentic_ai": "🧠 *Agentic AI*",
+    "sports": "🏏 *Sports News*",
 }
 
 _HEADERS = {
@@ -58,22 +69,23 @@ def fetch_all_news() -> dict:
     return {k: fetch_rss(v) for k, v in RSS_FEEDS.items()}
 
 
-SECTION_ORDER = ["global", "india", "tech", "sports"]
+SECTION_ORDER = ["global", "india", "tech", "ai", "agentic_ai", "sports"]
 
 
 def format_with_gemini(news_data: dict) -> dict:
     from google import genai
     from google.genai import types
 
+    keys = ", ".join(SECTION_ORDER)
     system_prompt = (
         "You are a highly concise, professional news editor. "
-        "You will receive a JSON object with four keys: global, india, tech, sports. "
+        f"You will receive a JSON object with these keys: {keys}. "
         "Each key contains up to 5 articles with title and description fields. "
-        "Output ONLY a JSON object with exactly these four keys: global, india, tech, sports. "
-        "Each value must be a SINGLE LINE of plain text (no newlines) containing 3 to 4 punchy "
-        "story summaries (max 12 words each), separated by ' • '. No URLs, no markdown, no headers "
+        f"Output ONLY a JSON object with exactly these keys: {keys}. "
+        "Each value must be a SINGLE LINE of plain text (no newlines) containing 4 to 6 punchy "
+        "story summaries (max 14 words each), separated by ' • '. No URLs, no markdown, no headers "
         "— just the bullet-separated summaries. Omit any story where both title and description are "
-        "empty. Each value must stay under 220 characters."
+        "empty. Each value must stay under 550 characters."
     )
     prompt = f"{system_prompt}\n\n{json.dumps(news_data, ensure_ascii=False)}"
 
@@ -93,51 +105,51 @@ def format_with_gemini(news_data: dict) -> dict:
     return {key: sections.get(key, "") for key in SECTION_ORDER}
 
 
-def sanitize_template_param(text: str) -> str:
+def sanitize_template_param(text: str, max_chars: int = 700) -> str:
     # WhatsApp template parameters reject newline/tab characters and runs of 4+ spaces.
     text = re.sub(r"[\n\t]+", " • ", text)
     text = re.sub(r" {2,}", " ", text)
     text = text.strip()
-    if len(text) > 200:
-        text = text[:197] + "..."
+    if len(text) > max_chars:
+        text = text[: max_chars - 3] + "..."
     return text
 
 
-def send_whatsapp_template(sections: dict) -> list[str]:
-    parameters = [
-        {"type": "text", "text": sanitize_template_param(sections[key])} for key in SECTION_ORDER
-    ]
+def send_one_message(number: str, body: str) -> str:
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": number.strip(),
+        "type": "template",
+        "template": {
+            "name": WA_TEMPLATE_NAME,
+            "language": {"code": WA_TEMPLATE_LANG},
+            "components": [
+                {"type": "body", "parameters": [{"type": "text", "text": body}]}
+            ],
+        },
+    }
+    resp = requests.post(
+        WHATSAPP_API_URL,
+        headers={
+            "Authorization": f"Bearer {WA_ACCESS_TOKEN}",
+            "Content-Type": "application/json",
+        },
+        json=payload,
+        timeout=20,
+    )
+    if not resp.ok:
+        print(f"WhatsApp API error {resp.status_code}: {resp.text}", file=sys.stderr)
+    resp.raise_for_status()
+    return resp.json()["messages"][0]["id"]
 
+
+def send_whatsapp_template(sections: dict) -> list[str]:
     message_ids = []
     for number in WA_TO.split(","):
-        payload = {
-            "messaging_product": "whatsapp",
-            "to": number.strip(),
-            "type": "template",
-            "template": {
-                "name": WA_TEMPLATE_NAME,
-                "language": {"code": WA_TEMPLATE_LANG},
-                "components": [
-                    {
-                        "type": "body",
-                        "parameters": parameters,
-                    }
-                ],
-            },
-        }
-        resp = requests.post(
-            WHATSAPP_API_URL,
-            headers={
-                "Authorization": f"Bearer {WA_ACCESS_TOKEN}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-            timeout=20,
-        )
-        if not resp.ok:
-            print(f"WhatsApp API error {resp.status_code}: {resp.text}", file=sys.stderr)
-        resp.raise_for_status()
-        message_ids.append(resp.json()["messages"][0]["id"])
+        for key in SECTION_ORDER:
+            content = sanitize_template_param(sections[key])
+            body = f"{SECTION_META[key]} — {content}" if content else SECTION_META[key]
+            message_ids.append(send_one_message(number, body))
     return message_ids
 
 
