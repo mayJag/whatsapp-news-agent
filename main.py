@@ -85,7 +85,7 @@ def format_with_gemini(news_data: dict) -> dict:
         "Each value must be a SINGLE LINE of plain text (no newlines) containing 4 to 6 punchy "
         "story summaries (max 14 words each), separated by ' • '. No URLs, no markdown, no headers "
         "— just the bullet-separated summaries. Omit any story where both title and description are "
-        "empty. Each value must stay under 550 characters."
+        "empty. Each value must stay under 400 characters."
     )
     prompt = f"{system_prompt}\n\n{json.dumps(news_data, ensure_ascii=False)}"
 
@@ -115,7 +115,7 @@ def sanitize_template_param(text: str, max_chars: int = 700) -> str:
     return text
 
 
-def send_one_message(number: str, body: str) -> str:
+def send_one_message(number: str, bodies: list[str]) -> str:
     payload = {
         "messaging_product": "whatsapp",
         "to": number.strip(),
@@ -124,7 +124,10 @@ def send_one_message(number: str, body: str) -> str:
             "name": WA_TEMPLATE_NAME,
             "language": {"code": WA_TEMPLATE_LANG},
             "components": [
-                {"type": "body", "parameters": [{"type": "text", "text": body}]}
+                {
+                    "type": "body",
+                    "parameters": [{"type": "text", "text": b} for b in bodies],
+                }
             ],
         },
     }
@@ -143,13 +146,20 @@ def send_one_message(number: str, body: str) -> str:
     return resp.json()["messages"][0]["id"]
 
 
+def render_section(key: str, sections: dict) -> str:
+    content = sanitize_template_param(sections[key], max_chars=450)
+    return f"{SECTION_META[key]} — {content}" if content else SECTION_META[key]
+
+
 def send_whatsapp_template(sections: dict) -> list[str]:
+    # Meta caps Marketing templates per recipient per day, so pack 2 sections per
+    # message and send 3 messages instead of one message per section.
+    pairs = [SECTION_ORDER[i : i + 2] for i in range(0, len(SECTION_ORDER), 2)]
     message_ids = []
     for number in WA_TO.split(","):
-        for key in SECTION_ORDER:
-            content = sanitize_template_param(sections[key])
-            body = f"{SECTION_META[key]} — {content}" if content else SECTION_META[key]
-            message_ids.append(send_one_message(number, body))
+        for pair in pairs:
+            bodies = [render_section(key, sections) for key in pair]
+            message_ids.append(send_one_message(number, bodies))
     return message_ids
 
 
