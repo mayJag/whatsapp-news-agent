@@ -29,14 +29,12 @@ RSS_FEEDS = {
     "sports": "https://news.google.com/rss/search?q=sports+news&hl=en-US&gl=US&ceid=US:en",
 }
 
-SECTION_META = {
-    "global": "🌍 *Global News*",
-    "india": "🇮🇳 *Indian News*",
-    "tech": "💻 *Tech News*",
-    "ai": "🤖 *AI News*",
-    "agentic_ai": "🧠 *Agentic AI*",
-    "sports": "🏏 *Sports News*",
-}
+SECTION_ORDER = ["global", "india", "tech", "ai", "agentic_ai", "sports"]
+
+# The template bakes the section headers and one bullet per line as static text,
+# so each headline is its own parameter. 6 sections x 4 bullets = 24 parameters.
+BULLETS_PER_SECTION = 4
+HEADLINE_MAX_CHARS = 110
 
 _HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -69,9 +67,6 @@ def fetch_all_news() -> dict:
     return {k: fetch_rss(v) for k, v in RSS_FEEDS.items()}
 
 
-SECTION_ORDER = ["global", "india", "tech", "ai", "agentic_ai", "sports"]
-
-
 def format_with_gemini(news_data: dict) -> dict:
     from google import genai
     from google.genai import types
@@ -82,10 +77,12 @@ def format_with_gemini(news_data: dict) -> dict:
         f"You will receive a JSON object with these keys: {keys}. "
         "Each key contains up to 5 articles with title and description fields. "
         f"Output ONLY a JSON object with exactly these keys: {keys}. "
-        "Each value must be a SINGLE LINE of plain text (no newlines) containing 4 to 6 punchy "
-        "story summaries (max 14 words each), separated by ' • '. No URLs, no markdown, no headers "
-        "— just the bullet-separated summaries. Omit any story where both title and description are "
-        "empty. Each value must stay under 400 characters."
+        f"Each value must be an array of exactly {BULLETS_PER_SECTION} strings. "
+        "Each string is one punchy standalone headline summarising a distinct story "
+        f"(max 14 words, under {HEADLINE_MAX_CHARS - 10} characters, no newlines, no URLs, "
+        "no markdown, no leading bullet or dash). If a section has fewer real stories, "
+        "write the remaining strings as the most newsworthy angles you can still support "
+        "from the given articles rather than inventing unrelated news."
     )
     prompt = f"{system_prompt}\n\n{json.dumps(news_data, ensure_ascii=False)}"
 
@@ -102,17 +99,29 @@ def format_with_gemini(news_data: dict) -> dict:
     if not response.text:
         raise RuntimeError(f"Unexpected empty Gemini response: {response}")
     sections = json.loads(response.text)
-    return {key: sections.get(key, "") for key in SECTION_ORDER}
+    return {key: sections.get(key) or [] for key in SECTION_ORDER}
 
 
-def sanitize_template_param(text: str, max_chars: int = 700) -> str:
+def sanitize_template_param(text: str, max_chars: int = HEADLINE_MAX_CHARS) -> str:
     # WhatsApp template parameters reject newline/tab characters and runs of 4+ spaces.
-    text = re.sub(r"[\n\t]+", " • ", text)
+    text = re.sub(r"[\n\t]+", " ", text)
     text = re.sub(r" {2,}", " ", text)
     text = text.strip()
     if len(text) > max_chars:
-        text = text[: max_chars - 3] + "..."
+        text = text[: max_chars - 3].rstrip() + "..."
     return text
+
+
+def build_params(sections: dict) -> list[str]:
+    # One parameter per headline, in section order; the template supplies the
+    # headers and line breaks. Empty parameters are rejected, so pad with a dash.
+    params = []
+    for key in SECTION_ORDER:
+        headlines = [sanitize_template_param(h) for h in sections[key] if str(h).strip()]
+        headlines = headlines[:BULLETS_PER_SECTION]
+        headlines += ["—"] * (BULLETS_PER_SECTION - len(headlines))
+        params.extend(headlines)
+    return params
 
 
 def send_one_message(number: str, bodies: list[str]) -> str:
@@ -146,21 +155,11 @@ def send_one_message(number: str, bodies: list[str]) -> str:
     return resp.json()["messages"][0]["id"]
 
 
-def render_section(key: str, sections: dict) -> str:
-    content = sanitize_template_param(sections[key], max_chars=450)
-    return f"{SECTION_META[key]} — {content}" if content else SECTION_META[key]
-
-
 def send_whatsapp_template(sections: dict) -> list[str]:
-    # Meta caps Marketing templates per recipient per day, so pack 2 sections per
-    # message and send 3 messages instead of one message per section.
-    pairs = [SECTION_ORDER[i : i + 2] for i in range(0, len(SECTION_ORDER), 2)]
-    message_ids = []
-    for number in WA_TO.split(","):
-        for pair in pairs:
-            bodies = [render_section(key, sections) for key in pair]
-            message_ids.append(send_one_message(number, bodies))
-    return message_ids
+    # Meta silently drops Marketing templates past a low per-recipient daily cap,
+    # so the whole digest goes out as a single message.
+    params = build_params(sections)
+    return [send_one_message(number, params) for number in WA_TO.split(",")]
 
 
 def main() -> None:
